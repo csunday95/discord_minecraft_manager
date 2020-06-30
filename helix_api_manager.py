@@ -33,7 +33,7 @@ class HelixAPIManager:
         return self
 
     def __exit__(self, type, value, traceback):
-        revoke_resp = requests.post(self.TWITCH_ID_URL + 'revoke', 
+        requests.post(self.TWITCH_ID_URL + 'revoke', 
             params={'client_id': self._client_id, 'token': self._auth_token}
         )
     
