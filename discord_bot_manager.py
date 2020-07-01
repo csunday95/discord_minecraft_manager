@@ -1,4 +1,5 @@
 
+from typing import List
 import requests
 
 
@@ -101,3 +102,25 @@ class DiscordBotManager:
             else:
                 break
         return collected_messages[first_older_index:]
+
+    def send_message_to_channel(self, 
+                                channel_id: str, 
+                                message: str, 
+                                user_mentions: List[str]):
+        resp = requests.post(
+            self.DISCORD_API_ENDPOINT + f'/channels/{channel_id}/messages',
+            headers={
+                'Authorization': f'Bot {self._bot_token}'
+            },
+            json={
+                'content': message,
+                'allowed_mentions': {
+                    'parse': [],
+                    'users': user_mentions 
+                }
+            }
+        )
+        if resp.status_code != requests.status_codes.codes['OK']:
+            return None
+        return resp.json()
+    

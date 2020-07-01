@@ -27,7 +27,9 @@ def main(args: List[str]):
         return 1
     channel_object = dbm.get_channel_object(test_channel_id)
     last_message_id = channel_object['last_message_id']
+    last_message = dbm.get_channel_message(test_channel_id, last_message_id)
     messages = dbm.get_all_channel_messages_between(test_channel_id, "0", last_message_id)
+    messages += [last_message]
     print(messages)
     return 0
 

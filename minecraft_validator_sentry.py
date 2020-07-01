@@ -38,17 +38,16 @@ class MinecraftValidatorSentry:
             if self._bot_user_id not in [m['id'] for m in message['mentions']]:
                 continue
             message_match = re.match(ADD_MESSAGE_PATTERN, message['content'])
-            # ignore messages not following the format, later send error resp to user?
+            # TODO: ignore messages not following the format, later send error resp to user?
             if message_match is None:
                 continue
-            users_to_add.append((message, message_match.group(0)))
+            users_to_add.append((message, message_match.group(1)))
         new_whitelist_entries = []
         while len(users_to_add) > 0:
             first_ten, users_to_add = users_to_add[:10], users_to_add[10:]
-            _, mc_unames = zip(*first_ten)
             resp = requests.post(
                 self.MOJANG_API_UUID_ENDPOINT, 
-                json=mc_unames
+                json=[t[1] for t in first_ten]
             )
             if resp.status_code != requests.status_codes.codes['OK']:
                 return False  # if unable to contact mojang
@@ -76,12 +75,29 @@ class MinecraftValidatorSentry:
                     current_disc_mc_map = dict()
             for whitelist_entry, discord_message in new_whitelist_entries:
                 discord_user_id = discord_message['author']['id']
+                minecraft_account_name = whitelist_entry['name']
                 if whitelist_entry is None:
-                    continue  # send message to user indicating the minecraft account does not exist
+                    self._discord_bot_manager.send_message_to_channel(
+                        self._monitor_channel_id,
+                        f'<@!{discord_user_id}> Minecraft account {minecraft_account_name} does not exist.',
+                        [discord_user_id]
+                    )  # TODO: add logging of failures
+                    continue
                 if discord_user_id in current_disc_mc_map:
-                    continue  # send message to user indicating they already have an mc account reistered
+                    registered_acct = current_disc_mc_map[discord_user_id]
+                    self._discord_bot_manager.send_message_to_channel(
+                        self._monitor_channel_id,
+                        f'<@!{discord_user_id}> You have already registered Minecraft account {registered_acct}.',
+                        [discord_user_id]
+                    )  # TODO: add logging of failures
+                    continue
                 current_disc_mc_map[discord_user_id] = whitelist_entry['uuid']
                 current_whitelist.append(whitelist_entry)
+                self._discord_bot_manager.send_message_to_channel(
+                    self._monitor_channel_id,
+                    f'<@!{discord_user_id}> Your username {minecraft_account_name} has been whitelisted.',
+                    [discord_user_id]
+                )
             with open(self._whitelist_file_path, 'w') as whitelist_file:
                 whitelist_file.write(json.dumps(current_whitelist, indent=4))
             with open(self._discord_mc_account_mapping_file_path, 'w') as map_file:
@@ -89,24 +105,25 @@ class MinecraftValidatorSentry:
         return True
 
     def _discord_join_channel_monitor_callback(self):
-        # for now 0, but prob load from file
+        # TODO: for now 0, but prob load from file
         last_checked_id = 0
         while self._is_validating:
             start_time = time.perf_counter()
-            while time.perf_counter() - start_time < self._check_period and self._is_validating:
-                time.sleep(0.2)
-            if not self._is_validating:
-                return
             channel_object = \
                  self._discord_bot_manager.get_channel_object(self._monitor_channel_id)
             last_message_id = channel_object['last_message_id']
             # if we're up to date, don't bother retrieving messages
             if last_message_id == last_checked_id:
+                while time.perf_counter() - start_time < self._check_period and self._is_validating:
+                    time.sleep(0.2)
                 continue
             unchecked_messages = self._discord_bot_manager.get_all_channel_messages_between(
                 self._monitor_channel_id, last_checked_id, last_message_id
             )
             self._add_to_whitelist_from_messages(unchecked_messages)
+            last_checked_id = last_message_id
+            while time.perf_counter() - start_time < self._check_period and self._is_validating:
+                time.sleep(0.2)
     
     def _extract_monitor_channel_id(self):
         channels = self._discord_bot_manager.get_guild_channel_list(
@@ -121,7 +138,7 @@ class MinecraftValidatorSentry:
                 return channel['id']
         return None
 
-    def begin_session(self):
+    def begin_sentry_session(self):
         self._discord_join_thread = Thread(
             target=self._discord_join_channel_monitor_callback
         )
@@ -135,6 +152,9 @@ class MinecraftValidatorSentry:
         self._is_validating = True
         self._discord_join_thread.start()
         return True
+
+    def run_terminal(self):
+        pass
 
     def end_session(self):
         self._is_validating = False
