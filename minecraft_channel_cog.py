@@ -1,5 +1,5 @@
 
-from typing import Dict, List, Set
+from typing import Dict, List, Set, Tuple
 import aiohttp
 import aiofiles
 import json
@@ -11,19 +11,23 @@ from discord.ext.commands import Cog, Bot, Context
 
 class MinecraftChannelCog(Cog):
     MOJANG_API_UUID_ENDPOINT = 'https://api.mojang.com/profiles/minecraft'
+    LP_USER_CMD_FMT = 'lp user {} parent {} {}'
 
     def __init__(self, 
                  bot: Bot, 
                  monitor_channel: str, 
                  allowed_roles: Set[str],
-                 whitelist_reload_cmd: str,
+                 minecraft_console_send_cmd: str,
+                 minecraft_console_sub_cmd: Tuple[str, Tuple[str, str]],
                  sub_check_interval: float,
                  whitelist_file_path: str,
                  discord_mc_map_file_path: str):
         self.bot = bot
         self._monitor_channel = monitor_channel
         self._allowed_roles = allowed_roles
-        self._whitelist_reload_cmd = whitelist_reload_cmd
+        self._minecraft_console_send_cmd = minecraft_console_send_cmd
+        self._minecraft_console_sub_cmd = minecraft_console_sub_cmd[0]
+        self._mc_role_unsub, self._mc_role_sub = minecraft_console_sub_cmd[1]
         self._sub_check_interval = sub_check_interval
         self._working_whitelist = None
         self._whitelisted_uuids = None
@@ -44,9 +48,9 @@ class MinecraftChannelCog(Cog):
                 self._working_discord_mc_mapping = json.loads(dc_mc_map_content)  
         self.bot.loop.create_task(self.check_registered_sub_status())
 
-    async def _run_whitelist_reload_cmd(self):
+    async def _send_to_minecraft_console(self, text: str):
         handle = await asyncio.create_subprocess_shell(
-            self._whitelist_reload_cmd, 
+            self._minecraft_console_send_cmd + ' "{}"'.format(text), 
             stdout=asyncio.subprocess.PIPE, 
             stderr=asyncio.subprocess.PIPE
         )
@@ -87,15 +91,25 @@ class MinecraftChannelCog(Cog):
                     self._working_whitelist.append(
                         {'uuid': mc_user_uuid, 'name': mc_username}
                     )
+                    await self._send_to_minecraft_console(
+                        self._minecraft_console_sub_cmd.format(
+                            mc_user_uuid, self._mc_role_sub
+                        )
+                    )
                 else:  # remove unsubbed users from whitelist
                     self._working_whitelist = \
                         [wl for wl in self._working_whitelist if wl['uuid'] != mc_user_uuid]
                     self._whitelisted_uuids.remove(mc_user_uuid)
+                    await self._send_to_minecraft_console(
+                        self._minecraft_console_sub_cmd.format(
+                            mc_user_uuid, self._mc_role_unsub
+                        )
+                    )
                 async with aiofiles.open(self._whitelist_file_path, 'w') as whitelist_file:
                     await whitelist_file.write(json.dumps(self._working_whitelist, indent=4))
                 # TODO: send message in channel to unsubbed user?
             if len(status_changed_list) > 0:
-                await self._run_whitelist_reload_cmd()
+                await self._send_to_minecraft_console('reload whitelist')
             await asyncio.sleep(self._sub_check_interval)
 
     @commands.command()
@@ -138,7 +152,12 @@ class MinecraftChannelCog(Cog):
         self._working_discord_mc_mapping[author_id] = whitelist_entry
         async with aiofiles.open(self._discord_mc_map_file_path, 'w') as dc_mc_map:
             await dc_mc_map.write(json.dumps(self._working_discord_mc_mapping, indent=4))
-        await self._run_whitelist_reload_cmd()
+        await self._send_to_minecraft_console(
+            self._minecraft_console_sub_cmd.format(
+                whitelist_entry['uuid'], self._mc_role_sub
+            )
+        )
+        await self._send_to_minecraft_console('whitelist reload')
         fmt = '<@!{}> User {} has been whitelisted.'
         await ctx.channel.send(fmt.format(author_id, mc_username))
 
@@ -164,6 +183,11 @@ class MinecraftChannelCog(Cog):
         self._working_discord_mc_mapping.pop(author_id)
         async with aiofiles.open(self._discord_mc_map_file_path, 'w') as dc_mc_map:
             await dc_mc_map.write(json.dumps(self._working_discord_mc_mapping, indent=4))
-        await self._run_whitelist_reload_cmd()
+        await self._send_to_minecraft_console(
+            self._minecraft_console_sub_cmd.format(
+                registered_uuid, self._mc_role_unsub
+            )
+        )
+        await self._send_to_minecraft_console('whitelist reload')
         fmt = '<@!{}> Minecraft account successfully deregistered.'
         await ctx.channel.send(fmt.format(author_id))
