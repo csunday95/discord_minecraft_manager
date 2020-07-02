@@ -12,7 +12,7 @@ from minecraft_channel_cog import MinecraftChannelCog
 
 EXPECTED_CONFIG_PARAMS = {
     'bot_token', 'monitor_channel', 'allowed_roles', 'minecraft_console_send_cmd',
-    'minecraft_console_sub_cmd', 'whitelist_file_path', 'disc_mc_map_file_path', 
+    'minecraft_console_sub_cmd', 'managed_role_id', 'whitelist_file_path', 'disc_mc_map_file_path', 
     'sub_check_interval'
 }
 
@@ -47,6 +47,7 @@ def main(args):
         set(config['allowed_roles']),
         config['minecraft_console_send_cmd'],
         config['minecraft_console_sub_cmd'],
+        config['managed_role_id'],
         config['sub_check_interval'],
         config['whitelist_file_path'],
         config['disc_mc_map_file_path']
