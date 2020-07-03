@@ -19,12 +19,18 @@ class MinecraftChannelCog(Cog, name='Registration'):
     LP_USER_CMD_FMT = 'lp user {} parent {} {}'
 
     class MinecraftChannelHelpCommand(MinimalHelpCommand):
-        CMD_HELP_FMT = '__{name}__\nUsage: `{usage}`\nDescription: {desc}'
-        def __init__(self, **options):
+        CMD_HELP_FMT = '>>> __{name}__\nUsage: `{usage}`\nDescription: {desc}'
+        def __init__(self, monitor_channel: str, **options):
+            self._monitor_channel = monitor_channel
             super().__init__(**options)
 
+        async def command_callback(self, ctx, *, command=None):
+            if ctx.channel.name != self._monitor_channel:
+                return
+            await super().command_callback(ctx, command=command)
+
         def get_opening_note(self):
-            fmt = 'Use `{prefix}{command_name} [command]` for more info on a command.'
+            fmt = '>>> Use `{prefix}{command_name} [command]` for more info on a command.'
             return fmt.format(prefix=self.clean_prefix, command_name='help')
 
         def add_command_formatting(self, command: Command):
@@ -51,6 +57,11 @@ class MinecraftChannelCog(Cog, name='Registration'):
                  whitelist_file_path: str,
                  discord_mc_map_file_path: str):
         self.bot = bot
+        self._help_command = MinecraftChannelCog.MinecraftChannelHelpCommand(
+            monitor_channel,
+            no_category='Other'
+        )
+        self.bot.help_command = self._help_command
         self._monitor_channel = monitor_channel
         self._allowed_roles = allowed_roles
         self._minecraft_console_send_cmd = minecraft_console_send_cmd
@@ -94,6 +105,10 @@ class MinecraftChannelCog(Cog, name='Registration'):
             await ctx.channel.send(fmt.format(author_id, exception))
         else:
             await self.bot.on_command_error(ctx, exception)
+
+    def cog_check(self, ctx: Context):
+        # if message is not from monitored channel, ignore
+        return ctx.channel.name == self._monitor_channel
 
     async def _send_to_minecraft_console(self, text: str):
         """Coroutine to send a command to the minecraft console. The command
@@ -278,9 +293,6 @@ class MinecraftChannelCog(Cog, name='Registration'):
             ctx (Context): the context of the register command
             mc_username (str): minecraft username to register
         """
-        # if message is not from monitored channel, ignore
-        if ctx.channel.name != self._monitor_channel:
-            return
         # get snowflake of author
         author_id = str(ctx.message.author.id)
         # check that author has an allowed role (should always be the case, but to be safe)
@@ -356,8 +368,6 @@ class MinecraftChannelCog(Cog, name='Registration'):
         Args:
             ctx (Context): the discordpy context for this message
         """
-        if ctx.channel.name != self._monitor_channel:
-            return
         author_id = str(ctx.message.author.id)
         if author_id not in self._working_discord_mc_mapping:
             fmt = '<@!{}> You not currently have a Minecraft account reigstered.'
@@ -388,9 +398,6 @@ class MinecraftChannelCog(Cog, name='Registration'):
         Args:
             ctx (Context): Discord message context
         """
-        # ignore commands in unmonitored channels
-        if ctx.channel.name != self._monitor_channel:
-            return
         # get author info from context
         author_id = str(ctx.message.author.id)
         # check if author has a registered mc username

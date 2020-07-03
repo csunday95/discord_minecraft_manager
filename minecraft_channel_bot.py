@@ -43,10 +43,7 @@ def main(args):
         with open(config['disc_mc_map_file_path'], 'w') as dc_mc_map:
             json.dump(dict(), dc_mc_map)
 
-    mchc = MinecraftChannelCog.MinecraftChannelHelpCommand(
-        no_category='Other'
-    )
-    bot = Bot(config['bot_prefix'], fetch_offline_members=True, help_command=mchc)
+    bot = Bot(config['bot_prefix'], fetch_offline_members=True)
     mcc = MinecraftChannelCog(
         bot, 
         config['monitor_channel'],
