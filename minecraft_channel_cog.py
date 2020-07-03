@@ -11,12 +11,35 @@ import uuid
 import discord
 from discord import Guild, Member, Object
 from discord.ext import commands
-from discord.ext.commands import Cog, Bot, Context
+from discord.ext.commands import Cog, Bot, Context, MinimalHelpCommand, Command
 
 
-class MinecraftChannelCog(Cog):
+class MinecraftChannelCog(Cog, name='Registration'):
     MOJANG_API_UUID_ENDPOINT = 'https://api.mojang.com/profiles/minecraft'
     LP_USER_CMD_FMT = 'lp user {} parent {} {}'
+
+    class MinecraftChannelHelpCommand(MinimalHelpCommand):
+        CMD_HELP_FMT = '__{name}__\nUsage: `{usage}`\nDescription: {desc}'
+        def __init__(self, **options):
+            super().__init__(**options)
+
+        def get_opening_note(self):
+            fmt = 'Use `{prefix}{command_name} [command]` for more info on a command.'
+            return fmt.format(prefix=self.clean_prefix, command_name='help')
+
+        def add_command_formatting(self, command: Command):
+            args = ['[{}]'.format(c) for c in command.clean_params]
+            args = ' '.join(args)
+            usage = usage='{prefix}{name} {args}'.format(
+                prefix=self.clean_prefix,
+                name=command.name,
+                args=args
+            )
+            self.paginator.add_line(self.CMD_HELP_FMT.format(
+                name=command.name,
+                usage=usage,
+                desc=command.short_doc
+            ))
 
     def __init__(self, 
                  bot: Bot, 
@@ -62,6 +85,9 @@ class MinecraftChannelCog(Cog):
 
     @commands.Cog.listener()
     async def on_command_error(self, ctx: Context, exception: Exception):
+        # if message wasn't from a monitored channel, ignore
+        if ctx.channel.name != self._monitor_channel:
+            return
         if isinstance(exception, discord.ext.commands.errors.CommandNotFound):
             author_id = str(ctx.author.id)
             fmt = '<@!{}> {}'
@@ -243,8 +269,10 @@ class MinecraftChannelCog(Cog):
 
     @commands.command()
     async def register(self, ctx: Context, mc_username: str):
-        """Registers a minecraft username to the server whitelist. Also records
-        the correspondence between discord and minecraft user.
+        """Registers a minecraft username to the server whitelist.
+
+        Registers a minecraft username to the discord->mc mapping and minecraft
+        whitelist if proper roles are posessed. 
 
         Args:
             ctx (Context): the context of the register command
@@ -320,8 +348,10 @@ class MinecraftChannelCog(Cog):
 
     @commands.command()
     async def deregister(self, ctx: Context):
-        """Deregister a user from the minecraft whitelist, allowing a new mc username
-        to be registered. Also deletes entry in discord -> mc map.
+        """Deregister a registered minecraft username.
+         
+        This allows a new mc usernameto be registered. 
+        Also deletes entry in discord -> mc map.
 
         Args:
             ctx (Context): the discordpy context for this message
@@ -347,3 +377,34 @@ class MinecraftChannelCog(Cog):
         # inform user deregister was successful
         fmt = '<@!{}> Minecraft account successfully deregistered.'
         await ctx.channel.send(fmt.format(author_id))
+
+    @commands.command()
+    async def status(self, ctx: Context):
+        """Get current minecraft registration status.
+
+        Returns the current minecraft registration status as a message to the
+        requesting user.
+
+        Args:
+            ctx (Context): Discord message context
+        """
+        # ignore commands in unmonitored channels
+        if ctx.channel.name != self._monitor_channel:
+            return
+        # get author info from context
+        author_id = str(ctx.message.author.id)
+        # check if author has a registered mc username
+        if author_id not in self._working_discord_mc_mapping:
+            fmt = '<@!{}> You not currently have a Minecraft account reigstered.'
+            await ctx.channel.send(fmt.format(author_id))
+            return
+        # retrieve mapped whitelist entry
+        wl_entry = self._working_discord_mc_mapping[author_id]
+        registered_uuid = uuid.UUID(wl_entry['uuid'])
+        # send message based on whitelist status
+        if registered_uuid in self._whitelisted_uuids:
+            fmt = '<@!{}> You have registered {} and are whitelisted.'
+            await ctx.channel.send(fmt.format(author_id, wl_entry['name']))
+        else:
+            fmt = '<@!{}> You have registered {} and but are not whitelisted.'
+            await ctx.channel.send(fmt.format(author_id, wl_entry['name']))
