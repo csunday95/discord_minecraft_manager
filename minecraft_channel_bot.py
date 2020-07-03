@@ -56,6 +56,7 @@ def main(args):
     )
     bot.add_cog(mcc)
     bot.run(config['bot_token'])
+    print('bot exiting cleanly')
     return 0
 
 
