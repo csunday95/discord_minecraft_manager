@@ -76,7 +76,6 @@ class MinecraftChannelCog(Cog):
         )
         # wait for command termination
         stdout, stderr = await handle.communicate()
-        print(stdout, stderr, handle.returncode)
         # check return code
         return_code = handle.returncode
         if return_code != 0:
