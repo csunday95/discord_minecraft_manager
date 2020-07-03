@@ -60,6 +60,15 @@ class MinecraftChannelCog(Cog):
         # start sub monitoring timer task
         await self._check_registered_sub_status()
 
+    @commands.Cog.listener()
+    async def on_command_error(self, ctx: Context, exception: Exception):
+        if isinstance(exception, discord.ext.commands.errors.CommandNotFound):
+            author_id = str(ctx.author.id)
+            fmt = '<@!{}> {}'
+            await ctx.channel.send(fmt.format(author_id, exception))
+        else:
+            await self.bot.on_command_error(ctx, exception)
+
     async def _send_to_minecraft_console(self, text: str):
         """Coroutine to send a command to the minecraft console. The command
         prefix is configuration in config.json.
@@ -87,20 +96,21 @@ class MinecraftChannelCog(Cog):
         # TODO: log reload here
         return
 
-    async def _add_user_to_whitelist(self, mc_uuid: str, mc_user: str):
+    async def _add_user_to_whitelist(self, mc_uuid: uuid.UUID, mc_user: str):
         """Add the given user to the whitelist.
 
         Args:
             mc_uuid (str): the minecraft UUID to add to the whitelist
             mc_user (str): the minecraft username to add
         """
+        mc_uuid_str = str(mc_uuid)
         self._working_whitelist.append(
-            {'uuid': mc_uuid, 'name': mc_user}
+            {'uuid': mc_uuid_str, 'name': mc_user}
         )
-        self._whitelisted_uuids.add(uuid.UUID(mc_uuid))
+        self._whitelisted_uuids.add(mc_uuid)
         await self._send_to_minecraft_console(
             self._minecraft_console_sub_cmd.format(
-                mc_uuid, self._mc_role_sub
+                mc_uuid_str, self._mc_role_sub
             )
         )
         await aiofiles.os.rename(self._whitelist_file_path, self._whitelist_file_path + '.bak')
@@ -108,22 +118,22 @@ class MinecraftChannelCog(Cog):
             await whitelist_file.write(json.dumps(self._working_whitelist, indent=4))
         await self._send_to_minecraft_console('whitelist reload')
 
-    async def _remove_user_from_whitelist(self, mc_uuid: str):
+    async def _remove_user_from_whitelist(self, mc_uuid: uuid.UUID):
         """Remvoe the given user from the whitelist based on uuid.
 
         Args:
             mc_uuid (str): the minecraft user UUID to remove
         """
         # account for whitelist inconsistencies
-        parsed_mc_uuid = uuid.UUID(mc_uuid)
-        if parsed_mc_uuid not in self._whitelisted_uuids:
+        mc_uuid_str = str(mc_uuid)
+        if mc_uuid not in self._whitelisted_uuids:
             return
         self._working_whitelist = \
-            [wl for wl in self._working_whitelist if wl['uuid'] != mc_uuid]
-        self._whitelisted_uuids.remove(parsed_mc_uuid)
+            [wl for wl in self._working_whitelist if wl['uuid'] != mc_uuid_str]
+        self._whitelisted_uuids.remove(mc_uuid)
         await self._send_to_minecraft_console(
             self._minecraft_console_sub_cmd.format(
-                mc_uuid, self._mc_role_unsub
+                mc_uuid_str, self._mc_role_unsub
             )
         )
         await aiofiles.os.rename(self._whitelist_file_path, self._whitelist_file_path + '.bak')
@@ -155,9 +165,10 @@ class MinecraftChannelCog(Cog):
         if member_id not in self._working_discord_mc_mapping:
             return
         wl_entry = self._working_discord_mc_mapping[member_id]
-        mc_uuid, mc_user = wl_entry['uuid'], wl_entry['name']
+        mc_uuid_str, mc_user = wl_entry['uuid'], wl_entry['name']
+        mc_uuid = uuid.UUID(mc_uuid_str)
         has_allowed_name = any(r.name in self._allowed_roles for r in after.roles)
-        if uuid.UUID(mc_uuid) not in self._whitelisted_uuids and has_allowed_name:
+        if mc_uuid not in self._whitelisted_uuids and has_allowed_name:
             await self._add_user_to_whitelist(mc_uuid, mc_user)
             try:
                 await after.add_roles(Object(self._managed_role_id), reason='Resub')
@@ -180,8 +191,8 @@ class MinecraftChannelCog(Cog):
         if member_id not in self._working_discord_mc_mapping:
             return
         wl_entry = self._working_discord_mc_mapping[member_id]
-        mc_uuid, _ = wl_entry['uuid'], wl_entry['name']
-        await self._remove_user_from_whitelist(mc_uuid)
+        mc_uuid_str, _ = wl_entry['uuid'], wl_entry['name']
+        await self._remove_user_from_whitelist(uuid.UUID(mc_uuid_str))
 
     async def _check_registered_sub_status(self):
         """Periodic task to check if and users have unsubbed or resubbed.
@@ -202,7 +213,8 @@ class MinecraftChannelCog(Cog):
             ban_list = await guild.bans()
             banned_user_ids = set(str(be[1].id) for be in ban_list)
             for disc_id, wl_entry in self._working_discord_mc_mapping.items():
-                mc_uuid = wl_entry['uuid']
+                mc_uuid_str = wl_entry['uuid']
+                mc_uuid = uuid.UUID(mc_uuid_str)
                 if disc_id in banned_user_ids:
                     status_changed_list.append((mc_uuid, wl_entry['name'], False, member))
                     continue
@@ -211,7 +223,7 @@ class MinecraftChannelCog(Cog):
                     print(f'User {disc_id} could not be retrieved')
                     continue  # TODO: log
                 # if the uuid is not in the whitelist
-                if uuid.UUID(mc_uuid) not in self._whitelisted_uuids:
+                if mc_uuid not in self._whitelisted_uuids:
                     # check if the user has resubbed
                     if any(r.name in self._allowed_roles for r in member.roles):
                         status_changed_list.append((mc_uuid, wl_entry['name'], True, member))
@@ -281,13 +293,14 @@ class MinecraftChannelCog(Cog):
         # if we were unable to retrieve a whitelist entry
         if whitelist_entry is None:
             return
+        mc_uuid = uuid.UUID(whitelist_entry['uuid'])
         # if the requested whitelist addition is already present, inform and exit
-        if uuid.UUID(whitelist_entry['uuid']) in self._whitelisted_uuids:
+        if mc_uuid in self._whitelisted_uuids:
             fmt = '<@!{}> User {} is already whitelisted.'
             await ctx.channel.send(fmt.format(author_id, mc_username))
             return
         # add new registration to whitelist
-        await self._add_user_to_whitelist(whitelist_entry['uuid'], whitelist_entry['name'])
+        await self._add_user_to_whitelist(mc_uuid, whitelist_entry['name'])
         # add new registration to discord mc mapping
         self._working_discord_mc_mapping[author_id] = whitelist_entry
         # make mapping backup
@@ -320,7 +333,7 @@ class MinecraftChannelCog(Cog):
             fmt = '<@!{}> You not currently have a Minecraft account reigstered.'
             await ctx.channel.send(fmt.format(author_id))
             return
-        registered_uuid = self._working_discord_mc_mapping[author_id]['uuid']
+        registered_uuid = uuid.UUID(self._working_discord_mc_mapping[author_id]['uuid'])
         await self._remove_user_from_whitelist(registered_uuid)
         # always remove entry from dc mc map
         self._working_discord_mc_mapping.pop(author_id)
