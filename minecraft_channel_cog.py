@@ -68,7 +68,8 @@ class MinecraftChannelCog(Cog):
             text (str): the text to append after the configured console send 
             command. Will be quoted.
         """
-        text = text.replace('\r', '').replace('\n', '')
+        # remove some control characters
+        text = text.replace('\r', '').replace('\n', '').replace('^','').replace('\\','')
         text = shlex.quote(text)
         # create subprocess to execute command to send to mc console
         handle = await asyncio.create_subprocess_shell(
