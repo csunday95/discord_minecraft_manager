@@ -194,8 +194,13 @@ class MinecraftChannelCog(Cog):
             if guild is None:
                 print('Unable to retrieve guild')
                 return  # TODO: log
+            ban_list = await guild.bans()
+            banned_user_ids = set(str(be[1].id) for be in ban_list)
             for disc_id, wl_entry in self._working_discord_mc_mapping.items():
                 mc_uuid = wl_entry['uuid']
+                if disc_id in banned_user_ids:
+                    status_changed_list.append((mc_uuid, wl_entry['name'], False, member))
+                    continue
                 member = guild.get_member(int(disc_id))  # type: Member
                 if member is None:
                     print(f'User {disc_id} could not be retrieved')
@@ -213,9 +218,10 @@ class MinecraftChannelCog(Cog):
             if resubbed:  # add resubbed users back to whitelist
                 await self._add_user_to_whitelist(mc_user_uuid, mc_username)
                 await member.add_roles(Object(self._managed_role_id), reason='Resub')
-            else:  # remove unsubbed users from whitelist
+            else:
+                removal_reason = 'Banned' if str(member.id) in banned_user_ids else 'Unsub'
                 await self._remove_user_from_whitelist(mc_user_uuid)
-                await member.remove_roles(Object(self._managed_role_id), reason='Unsub')
+                await member.remove_roles(Object(self._managed_role_id), reason=removal_reason)
             # TODO: send message in channel to unsubbed user?
 
     @commands.command()
