@@ -7,6 +7,7 @@ import json
 import asyncio
 import shlex
 import uuid
+import discord
 from discord import Guild, Member, Object
 from discord.ext import commands
 from discord.ext.commands import Cog, Bot, Context
@@ -23,7 +24,6 @@ class MinecraftChannelCog(Cog):
                  minecraft_console_send_cmd: str,
                  minecraft_console_sub_cmd: Tuple[str, Tuple[str, str]],
                  managed_role_id: str,
-                 sub_check_interval: float,
                  whitelist_file_path: str,
                  discord_mc_map_file_path: str):
         self.bot = bot
@@ -33,7 +33,6 @@ class MinecraftChannelCog(Cog):
         self._minecraft_console_sub_cmd = minecraft_console_sub_cmd[0]
         self._managed_role_id = int(managed_role_id)
         self._mc_role_unsub, self._mc_role_sub = minecraft_console_sub_cmd[1]
-        self._sub_check_interval = sub_check_interval
         self._working_whitelist = None
         self._whitelisted_uuids = None
         self._whitelist_file_path = whitelist_file_path
@@ -155,10 +154,29 @@ class MinecraftChannelCog(Cog):
         has_allowed_name = any(r.name in self._allowed_roles for r in after.roles)
         if mc_uuid not in self._whitelisted_uuids and has_allowed_name:
             await self._add_user_to_whitelist(mc_uuid, mc_user)
-            await after.add_roles(Object(self._managed_role_id), reason='Resub')
+            try:
+                await after.add_roles(Object(self._managed_role_id), reason='Resub')
+            except discord.errors.NotFound:
+                print('Role not found')
+                return
         elif not has_allowed_name:
             await self._remove_user_from_whitelist(mc_uuid)
-            await after.remove_roles(Object(self._managed_role_id), reason='Unsub')
+            try:
+                await after.remove_roles(Object(self._managed_role_id), reason='Unsub')
+            except discord.errors.NotFound:
+                print('Role not found')
+                return
+
+    @commands.Cog.listener()
+    async def on_member_ban(self, guild: Guild, user: Member):
+        if self._working_discord_mc_mapping is None:
+            return
+        member_id = str(user.id)
+        if member_id not in self._working_discord_mc_mapping:
+            return
+        wl_entry = self._working_discord_mc_mapping[member_id]
+        mc_uuid, _ = wl_entry['uuid'], wl_entry['name']
+        await self._remove_user_from_whitelist(mc_uuid)
 
     async def _check_registered_sub_status(self):
         """Periodic task to check if and users have unsubbed or resubbed.
@@ -173,10 +191,14 @@ class MinecraftChannelCog(Cog):
         async for guild in self.bot.fetch_guilds():  # type: Guild
             # have to get complete guild as fetch_guild just gives basic info
             guild = self.bot.get_guild(guild.id)
+            if guild is None:
+                print('Unable to retrieve guild')
+                return  # TODO: log
             for disc_id, wl_entry in self._working_discord_mc_mapping.items():
                 mc_uuid = wl_entry['uuid']
                 member = guild.get_member(int(disc_id))  # type: Member
                 if member is None:
+                    print(f'User {disc_id} could not be retrieved')
                     continue  # TODO: log
                 # if the uuid is not in the whitelist
                 if mc_uuid not in self._whitelisted_uuids:
@@ -263,7 +285,11 @@ class MinecraftChannelCog(Cog):
         async with aiofiles.open(self._discord_mc_map_file_path, 'w') as dc_mc_map:
             await dc_mc_map.write(json.dumps(self._working_discord_mc_mapping, indent=4))
         # add managed role to use
-        await ctx.message.author.add_roles(Object(self._managed_role_id), reason='New Registration')
+        try:
+            await ctx.message.author.add_roles(Object(self._managed_role_id), reason='New Registration')
+        except discord.errors.NotFound:
+            print('role not found')
+            return  # TODO: log
         # set user to subscriber role in server
         await self._send_to_minecraft_console(
             self._minecraft_console_sub_cmd.format(
