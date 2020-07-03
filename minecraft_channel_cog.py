@@ -4,6 +4,7 @@ import aiohttp
 import aiofiles
 import aiofiles.os
 import json
+import os
 import asyncio
 import shlex
 import uuid
@@ -67,10 +68,11 @@ class MinecraftChannelCog(Cog):
             text (str): the text to append after the configured console send 
             command. Will be quoted.
         """
+        text = text.replace('\r', '').replace('\n', '')
         text = shlex.quote(text)
         # create subprocess to execute command to send to mc console
         handle = await asyncio.create_subprocess_shell(
-            self._minecraft_console_send_cmd + ' {}'.format(text), 
+            self._minecraft_console_send_cmd + ' {}'.format(text) + os.linesep, 
             stdout=asyncio.subprocess.PIPE, 
             stderr=asyncio.subprocess.PIPE
         )
