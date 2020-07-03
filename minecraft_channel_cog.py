@@ -72,7 +72,7 @@ class MinecraftChannelCog(Cog):
         text = shlex.quote(text)
         # create subprocess to execute command to send to mc console
         handle = await asyncio.create_subprocess_shell(
-            self._minecraft_console_send_cmd + ' {}'.format(text) + os.linesep, 
+            self._minecraft_console_send_cmd + ' {}^M'.format(text), 
             stdout=asyncio.subprocess.PIPE, 
             stderr=asyncio.subprocess.PIPE
         )
@@ -300,12 +300,6 @@ class MinecraftChannelCog(Cog):
         except discord.errors.NotFound:
             print('role not found')
             return  # TODO: log
-        # set user to subscriber role in server
-        await self._send_to_minecraft_console(
-            self._minecraft_console_sub_cmd.format(
-                whitelist_entry['uuid'], self._mc_role_sub
-            )
-        )
         # tell user they are now whitelisted
         fmt = '<@!{}> User {} has been whitelisted.'
         await ctx.channel.send(fmt.format(author_id, mc_username))
@@ -332,11 +326,6 @@ class MinecraftChannelCog(Cog):
         async with aiofiles.open(self._discord_mc_map_file_path, 'w') as dc_mc_map:
             await dc_mc_map.write(json.dumps(self._working_discord_mc_mapping, indent=4))
         # demote user to lower mc role
-        await self._send_to_minecraft_console(
-            self._minecraft_console_sub_cmd.format(
-                registered_uuid, self._mc_role_unsub
-            )
-        )
         # remove managed role
         await ctx.message.author.remove_roles(Object(self._managed_role_id), reason='Deregister')
         # reload whitelist
