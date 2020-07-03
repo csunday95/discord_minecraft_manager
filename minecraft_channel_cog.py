@@ -70,7 +70,7 @@ class MinecraftChannelCog(Cog):
         text = shlex.quote(text)
         # create subprocess to execute command to send to mc console
         handle = await asyncio.create_subprocess_shell(
-            self._minecraft_console_send_cmd + ' "{}"'.format(text), 
+            self._minecraft_console_send_cmd + ' {}'.format(text), 
             stdout=asyncio.subprocess.PIPE, 
             stderr=asyncio.subprocess.PIPE
         )
