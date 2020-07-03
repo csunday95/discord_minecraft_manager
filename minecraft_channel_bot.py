@@ -18,7 +18,11 @@ EXPECTED_CONFIG_PARAMS = {
 
 def main(args):
     parser = argparse.ArgumentParser()
-    parser.add_argument('config_file_path', default='config.json')
+    parser.add_argument(
+        'config_file_path', 
+        default='config.json',
+        nargs='?'
+    )
     result = vars(parser.parse_args())
     config_file_path = result['config_file_path']
     if not os.path.isfile(config_file_path):
