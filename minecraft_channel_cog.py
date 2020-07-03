@@ -48,7 +48,9 @@ class MinecraftChannelCog(Cog):
             async with aiofiles.open(self._whitelist_file_path, 'r') as whitelist_file:
                 whitelist_content = await whitelist_file.read()
                 self._working_whitelist = json.loads(whitelist_content)
-                self._whitelisted_uuids = set(wl['uuid'] for wl in self._working_whitelist)
+                self._whitelisted_uuids = set(
+                    uuid.UUID(wl['uuid']) for wl in self._working_whitelist
+                )
         # load discord -> mc mapping from file
         if self._working_discord_mc_mapping is None:
             async with aiofiles.open(self._discord_mc_map_file_path, 'r') as dc_mc_map:
@@ -93,7 +95,7 @@ class MinecraftChannelCog(Cog):
         self._working_whitelist.append(
             {'uuid': mc_uuid, 'name': mc_user}
         )
-        self._whitelisted_uuids.add(mc_uuid)
+        self._whitelisted_uuids.add(uuid.UUID(mc_uuid))
         await self._send_to_minecraft_console(
             self._minecraft_console_sub_cmd.format(
                 mc_uuid, self._mc_role_sub
@@ -111,11 +113,12 @@ class MinecraftChannelCog(Cog):
             mc_uuid (str): the minecraft user UUID to remove
         """
         # account for whitelist inconsistencies
-        if mc_uuid not in self._whitelisted_uuids:
+        parsed_mc_uuid = uuid.UUID(mc_uuid)
+        if parsed_mc_uuid not in self._whitelisted_uuids:
             return
         self._working_whitelist = \
             [wl for wl in self._working_whitelist if wl['uuid'] != mc_uuid]
-        self._whitelisted_uuids.remove(mc_uuid)
+        self._whitelisted_uuids.remove(parsed_mc_uuid)
         await self._send_to_minecraft_console(
             self._minecraft_console_sub_cmd.format(
                 mc_uuid, self._mc_role_unsub
@@ -152,7 +155,7 @@ class MinecraftChannelCog(Cog):
         wl_entry = self._working_discord_mc_mapping[member_id]
         mc_uuid, mc_user = wl_entry['uuid'], wl_entry['name']
         has_allowed_name = any(r.name in self._allowed_roles for r in after.roles)
-        if mc_uuid not in self._whitelisted_uuids and has_allowed_name:
+        if uuid.UUID(mc_uuid) not in self._whitelisted_uuids and has_allowed_name:
             await self._add_user_to_whitelist(mc_uuid, mc_user)
             try:
                 await after.add_roles(Object(self._managed_role_id), reason='Resub')
@@ -206,7 +209,7 @@ class MinecraftChannelCog(Cog):
                     print(f'User {disc_id} could not be retrieved')
                     continue  # TODO: log
                 # if the uuid is not in the whitelist
-                if mc_uuid not in self._whitelisted_uuids:
+                if uuid.UUID(mc_uuid) not in self._whitelisted_uuids:
                     # check if the user has resubbed
                     if any(r.name in self._allowed_roles for r in member.roles):
                         status_changed_list.append((mc_uuid, wl_entry['name'], True, member))
@@ -277,7 +280,7 @@ class MinecraftChannelCog(Cog):
         if whitelist_entry is None:
             return
         # if the requested whitelist addition is already present, inform and exit
-        if whitelist_entry['uuid'] in self._whitelisted_uuids:
+        if uuid.UUID(whitelist_entry['uuid']) in self._whitelisted_uuids:
             fmt = '<@!{}> User {} is already whitelisted.'
             await ctx.channel.send(fmt.format(author_id, mc_username))
             return
