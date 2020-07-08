@@ -11,8 +11,10 @@ from threading import Thread
 from minecraft_channel_cog import MinecraftChannelCog
 
 EXPECTED_CONFIG_PARAMS = {
-    'bot_token', 'bot_prefix', 'monitor_channel', 'allowed_roles', 'minecraft_console_send_cmd',
-    'minecraft_console_sub_cmd', 'managed_role_id', 'whitelist_file_path', 'disc_mc_map_file_path'
+    'bot_token', 'bot_prefix', 'monitor_channel', 'moderator_channel', 
+    'allowed_roles', 'moderator_roles', 'minecraft_console_send_cmd',
+    'minecraft_console_sub_cmd', 'managed_role_id', 'whitelist_file_path', 
+    'disc_mc_map_file_path'
 }
 
 
@@ -47,7 +49,9 @@ def main(args):
     mcc = MinecraftChannelCog(
         bot, 
         config['monitor_channel'],
+        config['moderator_channel'],
         set(config['allowed_roles']),
+        set(config['moderator_roles']),
         config['minecraft_console_send_cmd'],
         config['minecraft_console_sub_cmd'],
         config['managed_role_id'],
