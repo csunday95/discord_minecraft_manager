@@ -20,12 +20,15 @@ class MinecraftChannelCog(Cog, name='Registration'):
 
     class MinecraftChannelHelpCommand(MinimalHelpCommand):
         CMD_HELP_FMT = '>>> __{name}__\nUsage: `{usage}`\nDescription: {desc}'
-        def __init__(self, monitor_channel: str, **options):
-            self._monitor_channel = monitor_channel
+        def __init__(self, monitor_channel: str, mod_channel: str, **options):
+            self._monitor_channels = {
+                monitor_channel,
+                mod_channel
+            }
             super().__init__(**options)
 
         async def command_callback(self, ctx, *, command=None):
-            if ctx.channel.name != self._monitor_channel:
+            if ctx.channel.name not in self._monitor_channels:
                 return
             await super().command_callback(ctx, command=command)
 
@@ -50,7 +53,9 @@ class MinecraftChannelCog(Cog, name='Registration'):
     def __init__(self, 
                  bot: Bot, 
                  monitor_channel: str, 
+                 moderator_channel: str,
                  allowed_roles: Set[str],
+                 moderator_roles: Set[str],
                  minecraft_console_send_cmd: str,
                  minecraft_console_sub_cmd: Tuple[str, Tuple[str, str]],
                  managed_role_id: str,
@@ -59,11 +64,15 @@ class MinecraftChannelCog(Cog, name='Registration'):
         self.bot = bot
         self._help_command = MinecraftChannelCog.MinecraftChannelHelpCommand(
             monitor_channel,
-            no_category='Other'
+            moderator_channel,
+            no_category='Other',
+            verify_checks=True
         )
         self.bot.help_command = self._help_command
         self._monitor_channel = monitor_channel
+        self._moderator_channel = moderator_channel
         self._allowed_roles = allowed_roles
+        self._moderator_roles = moderator_roles
         self._minecraft_console_send_cmd = minecraft_console_send_cmd
         self._minecraft_console_sub_cmd = minecraft_console_sub_cmd[0]
         self._managed_role_id = int(managed_role_id)
@@ -73,6 +82,10 @@ class MinecraftChannelCog(Cog, name='Registration'):
         self._whitelist_file_path = whitelist_file_path
         self._working_discord_mc_mapping = None
         self._discord_mc_map_file_path = discord_mc_map_file_path
+        self._moderator_commands = {
+            self.lookupdc,
+            self.lookupmc
+        }
 
     @commands.Cog.listener()
     async def on_ready(self):
@@ -106,9 +119,23 @@ class MinecraftChannelCog(Cog, name='Registration'):
         else:
             await self.bot.on_command_error(ctx, exception)
 
+    def _has_allowed_role(self, member: Member):
+        return any(r.name in self._allowed_roles for r in member.roles)
+
+    def _has_moderator_role(self, member: Member):
+        return any(r.name in self._moderator_roles for r in member.roles)
+    
+    def _is_moderator_command(self, command: Command):
+        return command in self._moderator_commands
+
     def cog_check(self, ctx: Context):
+        author = ctx.message.author  # type: Member
+        is_moderator = self._has_moderator_role(author)
+        is_mod_cmd = self._is_moderator_command(ctx.command)
         # if message is not from monitored channel, ignore
-        return ctx.channel.name == self._monitor_channel
+        if ctx.channel.name == self._monitor_channel and not is_mod_cmd:
+            return self._has_allowed_role(author) or is_moderator
+        return ctx.channel.name == self._moderator_channel and is_moderator
 
     async def _send_to_minecraft_console(self, text: str):
         """Coroutine to send a command to the minecraft console. The command
@@ -208,7 +235,7 @@ class MinecraftChannelCog(Cog, name='Registration'):
         wl_entry = self._working_discord_mc_mapping[member_id]
         mc_uuid_str, mc_user = wl_entry['uuid'], wl_entry['name']
         mc_uuid = uuid.UUID(mc_uuid_str)
-        has_allowed_name = any(r.name in self._allowed_roles for r in after.roles)
+        has_allowed_name = self._has_allowed_role(after)
         if mc_uuid not in self._whitelisted_uuids and has_allowed_name:
             await self._add_user_to_whitelist(mc_uuid, mc_user)
             try:
@@ -266,7 +293,7 @@ class MinecraftChannelCog(Cog, name='Registration'):
                 # if the uuid is not in the whitelist
                 if mc_uuid not in self._whitelisted_uuids:
                     # check if the user has resubbed
-                    if any(r.name in self._allowed_roles for r in member.roles):
+                    if self._has_allowed_role(member):
                         status_changed_list.append((mc_uuid, wl_entry['name'], True, member))
                     continue
                 # if user has none of the allowed roles, they have lost sub
@@ -296,7 +323,7 @@ class MinecraftChannelCog(Cog, name='Registration'):
         # get snowflake of author
         author_id = str(ctx.message.author.id)
         # check that author has an allowed role (should always be the case, but to be safe)
-        if not any(r.name in self._allowed_roles for r in ctx.message.author.roles):
+        if not self._has_allowed_role(ctx.message.author):
             fmt = '<@!{}> You do not have the necessary roles to bet whitelisted.'
             await ctx.channel.send(fmt.format(author_id))
             return  # TODO: user has somehow illegally joined channel?
@@ -415,3 +442,93 @@ class MinecraftChannelCog(Cog, name='Registration'):
         else:
             fmt = '<@!{}> You have registered {} and but are not whitelisted.'
             await ctx.channel.send(fmt.format(author_id, wl_entry['name']))
+    
+    @commands.command()
+    async def lookupmc(self, ctx: Context, discord_user: str):
+        """Get the registered minecraft username of a given discord user.
+
+        Args:
+            ctx (Context): the message context of this command invocation
+            discord_uder (str): the discord user by name or by snowflake
+        """
+        if self._working_discord_mc_mapping is None:
+            return
+        author_id = ctx.message.author.id
+        guild = ctx.message.guild  # type: guild 
+        mentions = ctx.message.mentions  # type: List[Member]
+        # if mention was used, extract member from it
+        if len(mentions) > 0:
+            member = mentions[0]
+        else:
+            # try by username first (case sensitive), then fallback to snowflake
+            member = guild.get_member_named(discord_user)
+        if member is None:
+            try:
+                discord_user_int = int(discord_user)
+                member = guild.get_member(discord_user_int)
+            except (TypeError, ValueError):
+                # if not a snowflake, ignore and assume user doesn't exist
+                pass
+        if member is None:
+            fmt = '<@!{}> No member with identifer {}.'
+            await ctx.channel.send(fmt.format(author_id, discord_user))
+            return
+        member_id = str(member.id)
+        if member_id not in self._working_discord_mc_mapping:
+            fmt = '<@!{}> User {} does not have a minecraft username registered.'
+            await ctx.channel.send(fmt.format(author_id, discord_user))
+            return
+        wl_entry = self._working_discord_mc_mapping[member_id]
+        fmt = '>>> <@!{}> Discord user {} has minecraft username {}.'
+        await ctx.channel.send(
+            fmt.format(author_id, discord_user, wl_entry['name'])
+        )
+
+    @commands.command()
+    async def lookupdc(self, ctx: Context, minecraft_user: str):
+        """Get the registered discord username of a given minecraft user.
+
+        Args:
+            ctx (Context): the invocation context of this command
+            minecraft_user (str): the minecraft username or uuid
+        """
+        if self._working_discord_mc_mapping is None:
+            return
+        author_id = ctx.message.author.id
+        try:
+            # check if requested user is by UUID
+            minecraft_user = uuid.UUID(minecraft_user)
+        except (ValueError, TypeError):
+            pass
+        # iterate through dc mc map until we find requested user
+        for dc_snowflake, wl_entry in self._working_discord_mc_mapping.items():
+            # perform matching check based on argument format
+            if isinstance(minecraft_user, uuid.UUID):
+                is_matching = uuid.UUID(wl_entry['uuid']) == minecraft_user
+            else:
+                is_matching = wl_entry['name'] == minecraft_user
+            # if we find entry with matching mc user
+            if is_matching:
+                # get detailed discord member information
+                member = ctx.message.guild.get_member(int(dc_snowflake)) # type: Member
+                if member is None:
+                    # if member can't be retrieved, say so and exit
+                    fmt = '>>> <@!{}> Minecraft user {} had Discord snowflake {} but'
+                    ' could not be retrieved.'
+                    await ctx.channel.send(fmt.format(
+                        author_id, minecraft_user, dc_snowflake
+                    ))
+                    return
+                # send requester information about discord user
+                fmt = '>>> <@!{}> Minecraft user {} has Discord username {} ({}).'
+                await ctx.channel.send(fmt.format(
+                    author_id, minecraft_user, member.display_name, member.id
+                ))
+                return
+        # if we did not find a matching user, say so
+        fmt = '<@!{}> Minecraft user {} is not registered.'
+        await ctx.channel.send(fmt.format(
+            author_id, minecraft_user
+        ))
+        return
+
