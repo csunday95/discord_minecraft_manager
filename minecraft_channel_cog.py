@@ -533,6 +533,7 @@ class MinecraftChannelCog(Cog, name='Registration'):
         ))
         return
 
+    @commands.command()
     async def warn(self, ctx: Context, minecraft_user: str, *warning_text: str):
         """Warn a Minecraft player
 
