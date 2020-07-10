@@ -1,5 +1,4 @@
-
-from typing import Dict, List, Set, Tuple
+from typing import List, Set, Tuple, Optional
 import aiohttp
 import aiofiles
 import aiofiles.os
@@ -17,6 +16,7 @@ from discord.ext.commands import Cog, Bot, Context, MinimalHelpCommand, Command
 class MinecraftChannelCog(Cog, name='Registration'):
     MOJANG_API_UUID_ENDPOINT = 'https://api.mojang.com/profiles/minecraft'
     LP_USER_CMD_FMT = 'lp user {} parent {} {}'
+    MAIL_SEND_CMD_FMT = 'mail send {who} {what}'
 
     class MinecraftChannelHelpCommand(MinimalHelpCommand):
         CMD_HELP_FMT = '>>> __{name}__\nUsage: `{usage}`\nDescription: {desc}'
@@ -84,7 +84,8 @@ class MinecraftChannelCog(Cog, name='Registration'):
         self._discord_mc_map_file_path = discord_mc_map_file_path
         self._moderator_commands = {
             self.lookupdc,
-            self.lookupmc
+            self.lookupmc,
+            self.warn
         }
 
     @commands.Cog.listener()
@@ -532,3 +533,69 @@ class MinecraftChannelCog(Cog, name='Registration'):
         ))
         return
 
+    async def warn(self, ctx: Context, minecraft_user: str, *warning_text: str):
+        """Warn a Minecraft player
+
+        Args:
+            ctx (Context): the invocation context of this command
+            minecraft_user (str): the minecraft username or uuid
+            *warning_text (str): Warning text
+        """
+        if self._working_discord_mc_mapping is None:
+            return
+        author_id = ctx.message.author.id
+        try:
+            # check if requested user is by UUID
+            minecraft_user = uuid.UUID(minecraft_user)
+        except (ValueError, TypeError):
+            pass
+        target_member = None  # type: Optional[Member]
+        # iterate through dc mc map until we find requested user
+        for dc_snowflake, wl_entry in self._working_discord_mc_mapping.items():
+            # perform matching check based on argument format
+            if isinstance(minecraft_user, uuid.UUID):
+                is_matching = uuid.UUID(wl_entry['uuid']) == minecraft_user
+            else:
+                is_matching = wl_entry['name'] == minecraft_user
+            # if we find entry with matching mc user
+            if is_matching:
+                # get detailed discord member information
+                target_member = ctx.message.guild.get_member(int(dc_snowflake))  # type: Member
+                if target_member is None:
+                    # if member can't be retrieved, say so and exit
+                    fmt = '>>> <@!{}> Minecraft user {} had Discord snowflake {} but' \
+                          ' could not be retrieved.'
+                    await ctx.channel.send(fmt.format(
+                        author_id, minecraft_user, dc_snowflake
+                    ))
+                    return
+                break
+
+        if target_member is None:
+            # if we did not find a matching user, say so
+            fmt = '<@!{}> Minecraft user {} is not registered.'
+            await ctx.channel.send(fmt.format(
+                author_id, minecraft_user
+            ))
+        else:
+            nice_message = ' '.join(warning_text)
+
+            fmt = 'A moderator has warned you with this message: ' + nice_message
+            await self._send_to_minecraft_console(self.MAIL_SEND_CMD_FMT.format(
+                who=minecraft_user,
+                what=fmt
+            ))
+
+            fmt = 'Hey, {who}, you have been warned by a moderator with this message: {what}'
+            await target_member.send(fmt.format(
+                who='<@{}>'.format(target_member.id),
+                what=nice_message
+            ))
+
+            fmt = '<@!{author}> Warned {minecraft} ({discord} on Discord) with the message {message}'
+            await ctx.channel.send(fmt.format(
+                author=author_id,
+                minecraft=minecraft_user,
+                discord=target_member.id,
+                message=nice_message
+            ))
