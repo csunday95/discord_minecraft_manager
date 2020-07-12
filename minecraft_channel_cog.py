@@ -8,6 +8,7 @@ import asyncio
 import shlex
 import uuid
 import discord
+import sys
 from discord import Guild, Member, Object
 from discord.ext import commands
 from discord.ext.commands import Cog, Bot, Context, MinimalHelpCommand, Command
@@ -15,6 +16,7 @@ from discord.ext.commands import Cog, Bot, Context, MinimalHelpCommand, Command
 
 class MinecraftChannelCog(Cog, name='Registration'):
     MOJANG_API_UUID_ENDPOINT = 'https://api.mojang.com/profiles/minecraft'
+    MOJANG_API_NAMES_ENDPOINT = 'https://api.mojang.com/user/profiles/{uuid}/names'
     LP_USER_CMD_FMT = 'lp user {} parent {} {}'
     MAIL_SEND_CMD_FMT = 'mail send {who} {what}'
 
@@ -85,7 +87,8 @@ class MinecraftChannelCog(Cog, name='Registration'):
         self._moderator_commands = {
             self.lookupdc,
             self.lookupmc,
-            self.warn
+            self.warn,
+            self.recheck
         }
 
     @commands.Cog.listener()
@@ -111,14 +114,14 @@ class MinecraftChannelCog(Cog, name='Registration'):
     @commands.Cog.listener()
     async def on_command_error(self, ctx: Context, exception: Exception):
         # if message wasn't from a monitored channel, ignore
-        if ctx.channel.name != self._monitor_channel:
+        if ctx.channel.name not in {self._monitor_channel, self._moderator_channel}:
             return
         if isinstance(exception, discord.ext.commands.errors.CommandNotFound):
             author_id = str(ctx.author.id)
             fmt = '<@!{}> {}'
             await ctx.channel.send(fmt.format(author_id, exception))
-        else:
-            await self.bot.on_command_error(ctx, exception)
+        # TODO: add error logging
+        sys.stderr.write(str(exception) + '\n')
 
     def _has_allowed_role(self, member: Member):
         return any(r.name in self._allowed_roles for r in member.roles)
@@ -310,6 +313,46 @@ class MinecraftChannelCog(Cog, name='Registration'):
                 await member.remove_roles(Object(self._managed_role_id), reason=removal_reason)
             # TODO: send message in channel to unsubbed user?
 
+    async def _retrieve_mojang_whitelist_entry(self, mc_username: str) -> Tuple[Optional[dict], Optional[str]]:
+        """retrieve Mojang registered uuid from API endpoint based on username. 
+
+        Args:
+            mc_username (str): the username to look up
+
+        Returns:
+            Tuple[Optional[dict], Optional[str]]: A tuple of (whitelist_entry, error) with 
+            whitelist_entry being None and error being an error message on failure. Error 
+            messages can optionally contain a {username} named format entry.
+        """
+        async with aiohttp.ClientSession() as session:
+            async with session.post(self.MOJANG_API_UUID_ENDPOINT, json=[mc_username]) as r:
+                if r.status != 200:
+                    return None, 'unable to contact Mojang for usernames.'
+                js = await r.json()
+        if len(js) < 1:
+            return None, '{username} not an existing Minecraft username.'
+        mc_uuid = js[0]['id']
+        # validate UUID for added safety
+        try:
+            uuid.UUID(mc_uuid)
+        except ValueError:
+            return None, 'got an invalid response from Mojang UUID endpoint.'
+        mc_name = js[0]['name']
+        whitelist_entry = {'uuid': mc_uuid, 'name': mc_name}
+        return whitelist_entry, None
+
+    async def _retrieve_current_mojang_username(self, mojang_uuid: uuid.UUID):
+        mojang_uuid = mojang_uuid.hex
+        async with aiohttp.ClientSession() as session:
+            async with session.get(self.MOJANG_API_NAMES_ENDPOINT.format(uuid=mojang_uuid)) as r:
+                if r.status == 204:
+                    return None, 'not an extant minecraft user UUID.'
+                elif r.status != 200:
+                    return None, f'unable to contact Mojang for usernames: [{r.status}].'
+                js = await r.json()
+        return js[0]['name'], None
+        
+
     @commands.command()
     async def register(self, ctx: Context, mc_username: str):
         """Registers a minecraft username to the server whitelist.
@@ -329,27 +372,14 @@ class MinecraftChannelCog(Cog, name='Registration'):
             await ctx.channel.send(fmt.format(author_id))
             return  # TODO: user has somehow illegally joined channel?
         # contact mojang API to get uuid for mc username
-        whitelist_entry = None
-        async with aiohttp.ClientSession() as session:
-            async with session.post(self.MOJANG_API_UUID_ENDPOINT, json=[mc_username]) as r:
-                if r.status == 200:
-                    js = await r.json()
-                    if len(js) < 1:
-                        fmt = '<@!{}> {} is not an existing Minecraft username.'
-                        await ctx.channel.send(fmt.format(author_id, mc_username))
-                        return
-                    mc_uuid = js[0]['id']
-                    # validate UUID for added safety
-                    try:
-                        uuid.UUID(mc_uuid)
-                    except ValueError:
-                        fmt = '<@!{}> Got an invalid response from Mojang UUID endpoint.'
-                        await ctx.channel.send(fmt.format(author_id, mc_username))
-                        return
-                    mc_name = js[0]['name']
-                    whitelist_entry = {'uuid': mc_uuid, 'name': mc_name}
-                else:
-                    await ctx.channel.send('Got error retrieving id for username {}'.format(mc_username))
+        whitelist_entry, err = await self._retrieve_mojang_whitelist_entry(mc_username)
+        if whitelist_entry is None:
+            fmt = '<@!{discord_id}> ' + err
+            await ctx.channel.send(fmt.format(
+                discord_id=author_id,
+                username=mc_username
+            ))
+            return
         # if discord user has already reigstered a different MC username
         if author_id in self._working_discord_mc_mapping and \
                 self._working_discord_mc_mapping[author_id]['uuid'] != whitelist_entry['uuid']:
@@ -600,3 +630,50 @@ class MinecraftChannelCog(Cog, name='Registration'):
                 discord=target_member.id,
                 message=nice_message
             ))
+
+    @commands.command()
+    async def recheck(self, ctx: Context, old_username: str):
+        if self._working_discord_mc_mapping is None:
+            return
+        author_id = ctx.message.author.id
+        try:
+            by_uuid = uuid.UUID(old_username)
+        except ValueError:
+            by_uuid = None
+        for _, wl_entry in self._working_discord_mc_mapping.items():
+            if by_uuid is None:
+                # if no UUID given, check for username match
+                if wl_entry['name'].lower() != old_username.lower():
+                    continue
+            elif by_uuid != uuid.UUID(wl_entry['uuid']):
+                # if UUID given, check by UUID
+                continue
+            old_username = wl_entry['name']
+            wl_uuid = uuid.UUID(wl_entry['uuid'])
+            new_username, err = await self._retrieve_current_mojang_username(wl_uuid)
+            if new_username is None:
+                msg = f'<@!{author_id}> ' + err
+                await ctx.channel.send(msg)
+                return
+            uuid_str = str(wl_uuid)
+            if old_username.lower() == new_username.lower():
+                msg = f'<@!{author_id}> {old_username}\'s ({uuid_str}) username is unchanged.'
+                await ctx.channel.send(msg)
+                return
+            # add new registration to discord mc mapping
+            self._working_discord_mc_mapping[str(author_id)] = {'uuid': wl_entry['uuid'], 'name': new_username}
+            # make mapping backup
+            await aiofiles.os.rename(self._discord_mc_map_file_path, self._discord_mc_map_file_path + '.bak')
+            # write out mapping
+            async with aiofiles.open(self._discord_mc_map_file_path, 'w') as dc_mc_map:
+                await dc_mc_map.write(json.dumps(self._working_discord_mc_mapping, indent=4))
+            msg = f'<@!{author_id}> User {old_username} ({uuid_str}) has changed their '
+            msg += f'Minecraft username to {new_username}. '
+            msg += 'The bot registration has been updated.'
+            await ctx.channel.send(msg)
+            return
+        if by_uuid is None:
+            msg = f'<@!{author_id}> No user with Minecraft username {old_username} is registerd.'
+        else:
+            msg = f'<@!{author_id}> No user with Minecraft UUID {by_uuid} is registerd.'
+        await ctx.channel.send(msg)
