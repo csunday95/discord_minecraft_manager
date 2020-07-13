@@ -9,6 +9,7 @@ import shlex
 import uuid
 import discord
 import sys
+import logging
 from discord import Guild, Member, Object
 from discord.ext import commands
 from discord.ext.commands import Cog, Bot, Context, MinimalHelpCommand, Command
@@ -88,7 +89,8 @@ class MinecraftChannelCog(Cog, name='Registration'):
             self.lookupdc,
             self.lookupmc,
             self.warn,
-            self.recheck
+            self.recheck,
+            self.refresh_subs
         }
 
     @commands.Cog.listener()
@@ -640,7 +642,7 @@ class MinecraftChannelCog(Cog, name='Registration'):
             by_uuid = uuid.UUID(old_username)
         except ValueError:
             by_uuid = None
-        for _, wl_entry in self._working_discord_mc_mapping.items():
+        for checked_dc_snowflake, wl_entry in self._working_discord_mc_mapping.items():
             if by_uuid is None:
                 # if no UUID given, check for username match
                 if wl_entry['name'].lower() != old_username.lower():
@@ -661,7 +663,7 @@ class MinecraftChannelCog(Cog, name='Registration'):
                 await ctx.channel.send(msg)
                 return
             # add new registration to discord mc mapping
-            self._working_discord_mc_mapping[str(author_id)] = {'uuid': wl_entry['uuid'], 'name': new_username}
+            self._working_discord_mc_mapping[checked_dc_snowflake] = {'uuid': wl_entry['uuid'], 'name': new_username}
             # make mapping backup
             await aiofiles.os.rename(self._discord_mc_map_file_path, self._discord_mc_map_file_path + '.bak')
             # write out mapping
@@ -677,3 +679,8 @@ class MinecraftChannelCog(Cog, name='Registration'):
         else:
             msg = f'<@!{author_id}> No user with Minecraft UUID {by_uuid} is registerd.'
         await ctx.channel.send(msg)
+
+    @commands.command()
+    async def refresh_subs(self, _: Context):
+        """Forces a recheck of all registered sub statuses"""
+        await self._check_registered_sub_status()
