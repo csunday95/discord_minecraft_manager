@@ -681,6 +681,10 @@ class MinecraftChannelCog(Cog, name='Registration'):
         await ctx.channel.send(msg)
 
     @commands.command()
-    async def refresh_subs(self, _: Context):
+    async def refresh_subs(self, ctx: Context):
         """Forces a recheck of all registered sub statuses"""
+        if self._working_discord_mc_mapping is None:
+            return
+        author_id = ctx.message.author.id
         await self._check_registered_sub_status()
+        await ctx.channel.send(f'<@!{author_id}> Subscriber refresh complete.')
